@@ -183,6 +183,8 @@ class _HomePageState extends State<HomePage>
       "https://file-2qxp.onrender.com/download/$code",
       "_blank",
     );
+
+    receiveController.clear();
   }
 
   void _syncHeight() {
