@@ -48,6 +48,6 @@ app.get("/download/:code", (req, res) => {
   delete files[req.params.code]; // delete after download
 });
 
-app.listen(3123, "0.0.0.0", () => {
-  console.log("Backend running on http://192.168.2.95:3123");
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
