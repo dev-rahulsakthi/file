@@ -94,6 +94,11 @@ class _HomePageState extends State<HomePage>
   Timer? _carouselTimer;
 
   bool _isUploading = false;
+  double _uploadProgress = 0.0;
+  String? _fileName;
+  int? _fileSize;
+  Timer? _progressTimer;
+  bool _processing = false;
 
   late AnimationController _animationController;
   late Animation<double> _opacityAnimation;
@@ -114,6 +119,8 @@ class _HomePageState extends State<HomePage>
 
   @override
   void dispose() {
+    _progressTimer?.cancel();
+    _carouselTimer?.cancel();
     _animationController.dispose();
     super.dispose();
   }
@@ -141,11 +148,21 @@ class _HomePageState extends State<HomePage>
     try {
       final result = await FilePicker.platform.pickFiles(withData: true);
       if (result == null) return;
+      
+      final file = result.files.single;
       setState(() {
         _isUploading = true;
+        _uploadProgress = 0.0;
+        _processing = false;
+        _fileName = file.name;
+        _fileSize = file.size;
       });
 
-      final file = result.files.single;
+      // Cancel any existing progress timer
+      _progressTimer?.cancel();
+      
+      // Start smooth progress simulation
+      _startProgressSimulation();
 
       var request = http.MultipartRequest(
         "POST",
@@ -163,16 +180,69 @@ class _HomePageState extends State<HomePage>
       final response = await request.send();
       final body = await response.stream.bytesToString();
 
+      // Set processing state and complete progress
+      setState(() {
+        _processing = true;
+        _uploadProgress = 1.0;
+      });
+      
+      // Small delay to show 100% progress and processing
+      await Future.delayed(const Duration(milliseconds: 800));
+      
       setState(() {
         uploadCode = body.split(":")[1].replaceAll(RegExp(r'[^\d]'), '');
+        _isUploading = false;
+        _uploadProgress = 0.0;
+        _processing = false;
       });
+      
+      _progressTimer?.cancel();
       _syncHeight();
       _startCarousel();
-    } finally {
+    } catch (e) {
+      _progressTimer?.cancel();
       setState(() {
         _isUploading = false;
+        _uploadProgress = 0.0;
+        _processing = false;
       });
+      // Show error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Upload failed: ${e.toString()}"),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
+  }
+
+  void _startProgressSimulation() {
+    _progressTimer?.cancel();
+    _progressTimer = Timer.periodic(const Duration(milliseconds: 50), (timer) {
+      if (!_isUploading) {
+        timer.cancel();
+        return;
+      }
+      
+      setState(() {
+        // Faster progress at the beginning, slower near the end
+        if (_uploadProgress < 0.7) {
+          _uploadProgress += 0.01; // 1% every 50ms = 20% per second
+        } else if (_uploadProgress < 0.9) {
+          _uploadProgress += 0.005; // 0.5% every 50ms = 10% per second
+        } else if (_uploadProgress < 0.95) {
+          _uploadProgress += 0.002; // 0.2% every 50ms = 4% per second
+        } else {
+          // Slow down significantly at 95%
+          if (_uploadProgress < 0.99) {
+            _uploadProgress += 0.001; // 0.1% every 50ms = 2% per second
+          } else {
+            // Stop at 99% until actual upload completes
+            _uploadProgress = 0.99;
+          }
+        }
+      });
+    });
   }
 
   void downloadFile() {
@@ -268,6 +338,7 @@ class _HomePageState extends State<HomePage>
     final cardWidth = isMobile ? double.infinity : 520.0;
 
     return Scaffold(
+      backgroundColor: Colors.orange.shade50,
       appBar: AppBar(
         elevation: 0,
         backgroundColor: Colors.transparent,
@@ -389,73 +460,188 @@ class _HomePageState extends State<HomePage>
   }
 
 // SEND CARD
-  Widget _buildSendCard(double width) {
-    return SizedBox(
-      width: width,
-      child: Stack(
-        children: [
-          Container(
-            key: _sendCardKey,
-            width: double.infinity,
-            padding: const EdgeInsets.all(30),
-            decoration: BoxDecoration(
-              color: Colors.grey.shade50,
-              border: Border.all(color: Colors.grey.shade300),
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  spreadRadius: 2,
-                  blurRadius: 8,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Column(
-              children: [
-                const Icon(Icons.cloud_upload,
-                    size: 60, color: Color(0xffFF7A00)),
-                const SizedBox(height: 16),
-                const Text("Drop files here or click to upload"),
-                const SizedBox(height: 20),
-                ElevatedButton(
-                    onPressed: pickAndUpload,
-                    child: const Text("Browse Files")),
-                if (uploadCode != null) ...[
-                  const SizedBox(height: 24),
-                  Text("Your Code: $uploadCode",
-                      style: const TextStyle(
-                          fontSize: 20, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                      height: 160,
-                      child: QrImageView(data: uploadCode!, size: 160)),
-                ],
-              ],
-            ),
+Widget _buildSendCard(double width) {
+  return SizedBox(
+    width: width,
+    height: 500,
+    child: Stack(
+      children: [
+        Container(
+          key: _sendCardKey,
+          width: double.infinity,
+          padding: const EdgeInsets.all(30),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade50,
+            border: Border.all(color: Colors.grey.shade300),
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.05),
+                spreadRadius: 2,
+                blurRadius: 8,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
-          if (_isUploading)
-            Positioned.fill(
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.85),
-                  borderRadius: BorderRadius.circular(12),
-                ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min, // Changed to prevent overflow
+            children: [
+              const Icon(Icons.cloud_upload,
+                  size: 60, color: Color(0xffFF7A00)),
+              const SizedBox(height: 16),
+              const Text("Drop files here or click to upload"),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                  onPressed: _isUploading ? null : pickAndUpload,
+                  child: const Text("Browse Files")),
+              if (uploadCode != null) ...[
+                const SizedBox(height: 24),
+                Text("Your Code: $uploadCode",
+                    style: const TextStyle(
+                        fontSize: 20, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
+                SizedBox(
+                    height: 160,
+                    child: QrImageView(data: uploadCode!, size: 160)),
+              ],
+            ],
+          ),
+        ),
+        if (_isUploading)
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.95),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 30), // Added vertical padding
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
-                  children: const [
-                    CircularProgressIndicator(color: Color(0xffFF7A00)),
-                    SizedBox(height: 16),
-                    Text("Uploading file…",
-                        style: TextStyle(fontWeight: FontWeight.w600)),
+                  children: [
+                    // Circular progress indicator
+                    Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        SizedBox(
+                          width: 80,
+                          height: 80,
+                          child: CircularProgressIndicator(
+                            value: _uploadProgress,
+                            strokeWidth: 6,
+                            backgroundColor: Colors.grey.shade300,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Color(0xffFF7A00).withOpacity(0.7),
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '${(_uploadProgress * 100).toInt()}%',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xffFF7A00),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    
+                    // Linear progress bar with more details
+                    Column(
+                      mainAxisSize: MainAxisSize.min, // Prevent overflow
+                      children: [
+                        Container(
+                          constraints: BoxConstraints(
+                            maxWidth: 400, // Limit width
+                          ),
+                          child: LinearProgressIndicator(
+                            value: _uploadProgress,
+                            backgroundColor: Colors.grey.shade300,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              const Color(0xffFF7A00),
+                            ),
+                            minHeight: 8,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        
+                        // File info
+                        if (_fileName != null)
+                          Text(
+                            _fileName!,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                            ),
+                            maxLines: 2, // Allow 2 lines
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                          ),
+                        
+                        const SizedBox(height: 4),
+                        
+                        // File size and status
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            if (_fileSize != null)
+                              Text(
+                                '${(_fileSize! / 1024 / 1024).toStringAsFixed(2)} MB',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade600,
+                                ),
+                              ),
+                            Expanded(
+                              child: Text(
+                                _processing 
+                                  ? 'Processing...' 
+                                  : 'Uploading...',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade600,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                                textAlign: TextAlign.right,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    
+                    const SizedBox(height: 24),
+                    
+                    // Cancel button
+                    if (_uploadProgress < 1.0)
+                      TextButton(
+                        onPressed: () {
+                          _progressTimer?.cancel();
+                          setState(() {
+                            _isUploading = false;
+                            _uploadProgress = 0.0;
+                            _processing = false;
+                          });
+                        },
+                        child: const Text(
+                          "Cancel",
+                          style: TextStyle(
+                            color: Colors.red,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
             ),
-        ],
-      ),
-    );
-  }
+          ),
+      ],
+    ),
+  );
+}
 
 // RECEIVE CARD
   Widget _buildReceiveCard(double width) {
